@@ -129,39 +129,29 @@ def render(df, players):
             st.markdown("<hr style='margin: 4px 0px; border-color: #1F2937;'>", unsafe_allow_html=True)
 
     with col_content:
-        if not active_players:
-            st.markdown(f"<div style='text-align:center; padding: 100px 0; color: #9CA3AF; border: 1px dashed #1F2937; border-radius: 10px;'>Profilini ve radarını görmek istediğiniz oyuncuları sol taraftan seçin.</div>", unsafe_allow_html=True)
-        else:
-            # Temel analiz çerçevesi ilk seçilen oyuncunun rolüne göre belirlenir
-            base_group = active_players[0]['group']
-            metrics = list(MUSTERMANN_ZONES.get(base_group, {}).keys())
+        # Temel analiz çerçevesi: seçili varsa onun grubuna göre, yoksa Midfielders default
+        base_group = active_players[0]['group'] if active_players else "Midfielders"
+        metrics = list(MUSTERMANN_ZONES.get(base_group, {}).keys())
 
-            # --- 1. DİNAMİK RADAR CHART ---
+        if not active_players:
+            st.markdown(f"<div style='text-align:center; padding: 60px 0; color: #9CA3AF; border: 1px dashed #1F2937; border-radius: 10px;'>Radarını görmek istediğiniz oyuncuları sol taraftan seçin.</div>", unsafe_allow_html=True)
+        else:
+            # --- 1. DİNAMİK RADAR CHART (sadece seçili oyuncular) ---
             if not metrics:
                 st.warning(f"Seçilen {base_group} rolü için metrik bulunamadı.")
             else:
                 fig = go.Figure()
-                processed_table_data = [] 
 
                 for p in active_players:
                     p_vals = []
                     raw_vals = []
-                    
                     row_data = p['data']
-                    total_elite = 0
-                    total_stat_score = 0
-                    valid_metrics = 0
-                    style_dict = {}
 
                     for m in metrics:
-                        # Kendi takımımız olduğu için lig çarpanına gerek yok
-                        raw_val = float(dp.get_val(row_data, m)) 
+                        raw_val = float(dp.get_val(row_data, m))
                         raw_vals.append(raw_val)
-                        
                         bounds = MUSTERMANN_ZONES.get(p['group'], {}).get(m, [0,0,0,0])
                         is_inverse = bounds[0] > bounds[3] if bounds else False
-                        
-                        # Radar için interpolasyon puanı (0-100)
                         b1, b2, b3, b4 = bounds
                         score = 50.0
                         epsilon = 1e-5
@@ -177,26 +167,12 @@ def render(df, players):
                             elif raw_val >= b3: score = 50 + ((b2 - raw_val) / ((b2 - b3) if (b2 - b3) else epsilon)) * 25
                             elif raw_val >= b4: score = 75 + ((b3 - raw_val) / ((b3 - b4) if (b3 - b4) else epsilon)) * 20
                             else: score = min(100, 95 + ((b4 - raw_val) / (b4 if b4 else epsilon)) * 5)
-                        
                         p_vals.append(score)
 
-                        # Tablo için Mustermann Skoru (1-5 Renk Skalası)
-                        level, hex_color = calculate_mustermann_score(raw_val, bounds, is_inverse)
-                        style_dict[m] = hex_color
-                        if level == 5: total_elite += 1
-                        
-                        w = get_metric_weight(m, p['focus'], p['group'])
-                        total_stat_score += (level / 5) * 100 * w
-                        valid_metrics += w
-
-                    # Radar Çizimleri
-                    hover_texts = []
-                    for i, m in enumerate(metrics):
-                        hover_texts.append(f"<b>{m}</b><br>Skor: {p_vals[i]:.1f}/100<br>Ham Veri: {raw_vals[i]:.2f}")
-                    
+                    hover_texts = [f"<b>{m}</b><br>Skor: {p_vals[i]:.1f}/100<br>Ham Veri: {raw_vals[i]:.2f}" for i, m in enumerate(metrics)]
                     color = p['color']
                     rgba_color = f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.15)" if color.startswith('#') else color.replace(')', ', 0.15)').replace('rgb', 'rgba')
-                    
+
                     fig.add_trace(go.Scatterpolar(
                         r=p_vals + [p_vals[0]],
                         theta=metrics + [metrics[0]],
@@ -209,20 +185,6 @@ def render(df, players):
                         text=hover_texts + [hover_texts[0]],
                         hoverinfo="text"
                     ))
-
-                    # Oyuncu Analiz Puanını Hesapla (Table için)
-                    base_score = (total_stat_score / valid_metrics) if valid_metrics > 0 else 0
-                    final_score = min(max(base_score + get_age_bonus(row_data.get('Age', 25)), 0), 100)
-
-                    # Tablo Satırı Olarak Ekle
-                    processed_table_data.append({
-                        "Player": p['name'],
-                        "Age": row_data.get('Age', '-'),
-                        "Total_Elite_Count": total_elite,
-                        "Scout_Score": final_score,
-                        "raw_data": dict(zip(metrics, raw_vals)),
-                        "_style": style_dict
-                    })
 
                 fig.update_layout(
                     template="plotly_dark",
@@ -238,59 +200,111 @@ def render(df, players):
                     legend=dict(orientation="h", y=-0.2, xanchor="center", x=0.5, font=dict(color='#F3F4F6', size=12)),
                     height=600
                 )
-                
                 st.plotly_chart(fig, use_container_width=True)
 
-            # --- 2. HEATMAP (ISI HARİTASI) TABLOSU ---
-            st.markdown("### 📊 Detaylı Performans Tablosu")
-            st.markdown("""
-            <div style='display: flex; gap: 8px; margin-bottom: 15px; font-size: 11px; align-items: center; flex-wrap: wrap;'>
-                <span style='color: #aaa;'><b>Renk Skalası:</b></span>
-                <div style='padding: 3px 10px; background-color: rgba(0, 255, 136, 0.9); border-radius: 4px; color: black; font-weight: bold;'>Elit</div>
-                <div style='padding: 3px 10px; background-color: rgba(0, 212, 255, 0.9); border-radius: 4px; color: black; font-weight: bold;'>İyi</div>
-                <div style='padding: 3px 10px; background-color: rgba(255, 215, 0, 0.9); border-radius: 4px; color: black; font-weight: bold;'>Ortalama</div>
-                <div style='padding: 3px 10px; background-color: rgba(255, 140, 0, 0.9); border-radius: 4px; color: white; font-weight: bold;'>Zayıf</div>
-                <div style='padding: 3px 10px; background-color: rgba(255, 75, 75, 0.9); border-radius: 4px; color: white; font-weight: bold;'>Çok Zayıf</div>
-            </div>
-            """, unsafe_allow_html=True)
+        # --- 2. HEATMAP TABLOSU: TÜM KADRO (seçililer üstte ve renkli) ---
+        st.markdown("### 📊 Detaylı Performans Tablosu")
+        st.markdown("""
+        <div style='display: flex; gap: 8px; margin-bottom: 15px; font-size: 11px; align-items: center; flex-wrap: wrap;'>
+            <span style='color: #aaa;'><b>Renk Skalası:</b></span>
+            <div style='padding: 3px 10px; background-color: rgba(0, 255, 136, 0.9); border-radius: 4px; color: black; font-weight: bold;'>Elit</div>
+            <div style='padding: 3px 10px; background-color: rgba(0, 212, 255, 0.9); border-radius: 4px; color: black; font-weight: bold;'>İyi</div>
+            <div style='padding: 3px 10px; background-color: rgba(255, 215, 0, 0.9); border-radius: 4px; color: black; font-weight: bold;'>Ortalama</div>
+            <div style='padding: 3px 10px; background-color: rgba(255, 140, 0, 0.9); border-radius: 4px; color: white; font-weight: bold;'>Zayıf</div>
+            <div style='padding: 3px 10px; background-color: rgba(255, 75, 75, 0.9); border-radius: 4px; color: white; font-weight: bold;'>Çok Zayıf</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-            if processed_table_data:
-                # Puanı en yüksek olanı en üste al
-                processed_table_data.sort(key=lambda x: x['Scout_Score'], reverse=True)
+        # Seçili oyuncuların isim->renk map'i
+        RADAR_PALETTE = [COLORS.get('primary', '#00E5FF'), COLORS.get('secondary', '#FF3366'), '#00FFAA', '#FFB020', '#B020FF', '#FF4444']
+        active_color_map = {p['name']: RADAR_PALETTE[i % len(RADAR_PALETTE)] for i, p in enumerate(active_players)}
+        active_names = set(active_color_map.keys())
 
-                html = """
-                <style>
-                .scout-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-family: sans-serif; font-size: 11px; color: #ddd; margin-bottom: 20px; }
-                .scout-table th { background-color: #1e1e1e; padding: 6px 2px; border-bottom: 1px solid #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 10px;}
-                .scout-table td { padding: 0; border-bottom: 1px solid #333; border-right: 1px solid #222; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 26px; }
-                .scout-table .player-name { text-align: left; padding-left: 8px; font-weight: bold; border-right: none; width: 140px; }
-                .scout-table .text-cell { padding: 4px 2px; border-right: none; width: 35px; }
-                .scout-table tr:hover { background-color: #2a2a2a; }
-                .stat-cell:hover { opacity: 0.7; }
-                </style>
-                <table class='scout-table'>
-                """
-                
-                # Tablo Başlıkları
-                html += "<thead><tr><th class='player-name'>Player</th><th class='text-cell'>Age</th><th class='text-cell'>Elit</th><th style='width: 45px;'>Puan</th>"
-                for m in metrics:
-                    html += f"<th>{get_short_name(m)}</th>"
-                html += "</tr></thead><tbody>"
+        # Tüm takımı hesapla
+        all_table_data = []
+        for _, row_data in df_sorted.iterrows():
+            p_name = row_data['Player']
+            p_group = row_data.get('Temp_Group', dp.get_player_group(row_data['Position']))
+            row_metrics = list(MUSTERMANN_ZONES.get(base_group, {}).keys())
 
-                # Tablo Satırları ve CSS Enjeksiyonu
-                for row in processed_table_data:
-                    html += "<tr>"
+            total_elite = 0
+            total_stat_score = 0
+            valid_metrics_count = 0
+            style_dict = {}
+            raw_vals_map = {}
+
+            for m in row_metrics:
+                raw_val = float(dp.get_val(row_data, m))
+                raw_vals_map[m] = raw_val
+                bounds = MUSTERMANN_ZONES.get(base_group, {}).get(m, [0,0,0,0])
+                is_inverse = bounds[0] > bounds[3] if bounds else False
+                level, hex_color = calculate_mustermann_score(raw_val, bounds, is_inverse)
+                style_dict[m] = hex_color
+                if level == 5: total_elite += 1
+                w = get_metric_weight(m, "⚖️ Dengeli", base_group)
+                total_stat_score += (level / 5) * 100 * w
+                valid_metrics_count += w
+
+            base_score = (total_stat_score / valid_metrics_count) if valid_metrics_count > 0 else 0
+            final_score = min(max(base_score + get_age_bonus(row_data.get('Age', 25)), 0), 100)
+
+            all_table_data.append({
+                "Player": p_name,
+                "Age": row_data.get('Age', '-'),
+                "Total_Elite_Count": total_elite,
+                "Scout_Score": final_score,
+                "raw_data": raw_vals_map,
+                "_style": style_dict,
+                "_is_active": p_name in active_names,
+                "_color": active_color_map.get(p_name, None)
+            })
+
+        # Seçililer üste, sonra puana göre sırala
+        all_table_data.sort(key=lambda x: (0 if x['_is_active'] else 1, -x['Scout_Score']))
+
+        if all_table_data:
+            row_metrics = list(MUSTERMANN_ZONES.get(base_group, {}).keys())
+            html = """
+            <style>
+            .scout-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-family: sans-serif; font-size: 11px; color: #ddd; margin-bottom: 20px; }
+            .scout-table th { background-color: #1e1e1e; padding: 6px 2px; border-bottom: 1px solid #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 10px;}
+            .scout-table td { padding: 0; border-bottom: 1px solid #333; border-right: 1px solid #222; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 26px; }
+            .scout-table .player-name { text-align: left; padding-left: 8px; font-weight: bold; border-right: none; width: 140px; }
+            .scout-table .text-cell { padding: 4px 2px; border-right: none; width: 35px; }
+            .scout-table tr:hover { background-color: #2a2a2a; }
+            .stat-cell:hover { opacity: 0.7; }
+            .active-row { background-color: rgba(255,255,255,0.04) !important; }
+            </style>
+            <table class='scout-table'>
+            """
+            html += "<thead><tr><th class='player-name'>Player</th><th class='text-cell'>Age</th><th class='text-cell'>Elit</th><th style='width: 45px;'>Puan</th>"
+            for m in row_metrics:
+                html += f"<th>{get_short_name(m)}</th>"
+            html += "</tr></thead><tbody>"
+
+            for row in all_table_data:
+                is_active = row['_is_active']
+                p_color = row['_color']
+                row_class = "active-row" if is_active else ""
+                html += f"<tr class='{row_class}'>"
+
+                # İsim: aktifse renkli ve glow efektli
+                if is_active and p_color:
+                    name_style = f"color: {p_color}; text-shadow: 0 0 8px {p_color}; font-weight: 900;"
+                    html += f"<td class='player-name' style='{name_style}'>● {row['Player']}</td>"
+                else:
                     html += f"<td class='player-name'>{row['Player']}</td>"
-                    html += f"<td class='text-cell'>{row['Age']}</td>"
-                    html += f"<td class='text-cell'>{row['Total_Elite_Count']}</td>"
-                    html += f"<td class='text-cell' style='font-weight:bold; color: #00d4ff;'>{row['Scout_Score']:.1f}</td>"
-                    
-                    style_dict = row['_style']
-                    for m in metrics:
-                        val = row['raw_data'].get(m, 0)
-                        bg_color = style_dict.get(m, "transparent")
-                        html += f"<td class='stat-cell' style='background-color: {bg_color}; cursor: help;' title='{m}: {val:.2f}'><div style='width: 100%; height: 100%;'></div></td>"
-                    html += "</tr>"
-                
-                html += "</tbody></table>"
-                st.markdown(html, unsafe_allow_html=True)
+
+                html += f"<td class='text-cell'>{row['Age']}</td>"
+                html += f"<td class='text-cell'>{row['Total_Elite_Count']}</td>"
+                html += f"<td class='text-cell' style='font-weight:bold; color: #00d4ff;'>{row['Scout_Score']:.1f}</td>"
+
+                style_dict = row['_style']
+                for m in row_metrics:
+                    val = row['raw_data'].get(m, 0)
+                    bg_color = style_dict.get(m, "transparent")
+                    html += f"<td class='stat-cell' style='background-color: {bg_color}; cursor: help;' title='{m}: {val:.2f}'><div style='width: 100%; height: 100%;'></div></td>"
+                html += "</tr>"
+
+            html += "</tbody></table>"
+            st.markdown(html, unsafe_allow_html=True)
