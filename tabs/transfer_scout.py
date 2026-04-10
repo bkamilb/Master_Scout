@@ -194,13 +194,20 @@ def render(df_team):
                 
                 # Yeni MUSTERMANN_ZONES uyumu
                 bounds = MUSTERMANN_ZONES.get(group, {}).get(m)
+                
+                # BUG FIX: Eğer bu metrik oyuncunun grubuna ait değilse (bounds=None),
+                # renklendirmeyi nötr bırak ve elite/skor hesabına KATMA.
+                # [0,0,0,0] fallback'i kaldırdık çünkü val=0 ile val>=g(0) her zaman level=5 veriyordu.
                 if not bounds:
-                    bounds = [0,0,0,0] # Fallback
+                    style_dict[f"{m} (Adj)"] = "transparent"
+                    continue  # Bu metriği atla, gruba ait değil
+                    
                 is_inverse = bounds[0] > bounds[3]
                 level, hex_color = calculate_mustermann_score(adj_val, bounds, is_inverse)
                 
                 style_dict[f"{m} (Adj)"] = hex_color
                 
+                # Sadece gruba ait metriklerde elite say
                 if level == 5:
                     total_elite += 1
                         
